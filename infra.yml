@@ -1,0 +1,206 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: "Arquitectura del ecommerce"
+
+Parameters: 
+  Enviroment: 
+    Description: "dev"
+    Type: String 
+    Default: "dev"
+    AllowedValues: 
+        - "dev"
+        - "staging"
+        - "prod"
+
+  DbName: 
+    Description: "Nombre de la Base de Datos"
+    Type: String
+    Default: "EcommerceDB"
+    
+  DbUser:
+    Description: "Usuario base de datos"
+    Type: String
+    Default: "EcommerceUser"
+
+  DbPassword: 
+    Description: "Contrasena dela base de datos"
+    Type: String
+    Default: "EcommercePassword"
+    NoEcho: true
+
+  KeyName: 
+    Description: "Nombre del par de claves EC2"
+    Type: 'AWS::EC2::KeyPair::KeyName'
+    Default: "EcommerceKey"
+
+  SSHBastion:
+      Description: "IP permitida para acceder al Bastion"
+      Type: String
+      Default: "0.0.0.0/0"
+
+  Email: 
+    Description: "Email para las alertas"
+    Type: String
+    Default: "v.ortizzuleta@gmail.com"
+
+  Number:
+    Description: "Numero para alertas sms"
+    Type: String
+    Default: "+573154159918"
+
+
+  InstanceType:
+    Description: "Tipo de instacia de la EC2"
+    Type: String
+    Default: "t2.medium"
+
+  DBInstanceType:
+    Description: "Tipo de instancia de RDS"
+    Type: String
+    Default: "db.t3.micro"
+
+Mappings: 
+  Region: 
+    us-east-1: 
+      AMI: 'ami-0f88e80871fd81e91' #Amazon Linux 2
+
+Resources: 
+  VPC-ecommerce:
+    Type: "AWS::EC2::VPC"
+    Properties:
+      CidrBlock: "10.0.0.0/16"
+      EnableDnsHostnames: true
+      EnableDnsSupport: true
+      Tags:
+        - Key: Name
+          Value: !Sub "${Enviroment}-VPC"
+
+  PublicSubnet:
+    Type: 'AWS::EC2::Subnet'
+    Properties:
+      VpcId: !Ref VPC-ecommerce
+      CidrBlock: '10.0.1.0/24'
+      AvailabilityZone: !Select [0, !GetAZs '']
+      MapPublicIpOnLaunch: true #Subnet publica 
+      Tags:
+        - Key: Name
+          Value: !Sub '${Environment}-PublicSubnet'
+
+  PublicSubnet2:
+    Type: 'AWS::EC2::Subnet'
+    Properties:
+      VpcId: !Ref VPC-ecommerce
+      CidrBlock: '10.0.3.0/24'
+      AvailabilityZone: !Select [0, !GetAZs '']
+      MapPublicIpOnLaunch: true #Subnet publica 
+      Tags:
+        - Key: Name
+          Value: !Sub '${Environment}-PublicSubnet2'
+
+  PrivateSubnet:
+    Type: 'AWS::EC2::Subnet'
+    Properties:
+      VpcId: !Ref VPC-ecommerce
+      CidrBlock: '10.0.2.0/24'
+      AvailabilityZone: !Select [0, !GetAZs '']
+      MapPublicIpOnLaunch: false #Subnet privada 
+      Tags:
+        - Key: Name
+          Value: !Sub '${Environment}-PrivateSubnet'
+  
+  PrivateSubnet2:
+    Type: 'AWS::EC2::Subnet'
+    Properties:
+      VpcId: !Ref VPC-ecommerce
+      CidrBlock: '10.0.4.0/24'
+      AvailabilityZone: !Select [0, !GetAZs '']
+      MapPublicIpOnLaunch: false #Subnet privada 
+      Tags:
+        - Key: Name
+          Value: !Sub '${Environment}-PrivateSubnet2'
+
+  InternetGateway:
+    Type: "AWS::EC2::InternetGateway"
+    Properties:
+      Tags: 
+        - Key: Name
+          Value: !Sub '${Environment}-InternetGateway'
+
+  AttachmentGateway:
+    Type: "AWS::EC2::VPCGatewayAttachment"
+    Properties:
+      InternetGatewayId: !Ref InternetGateway
+      VpcId: !Ref VPC-ecommerce
+
+  ElasticIP:
+    Type: "AWS::EC2::EIP"
+    Properties:
+      Domain: vpc
+      Tags:
+        - Key: Name
+          Values: !Sub '${Environment}-ElasticIP'
+
+  NatGateway:
+    Type: 'AWS::EC2::NatGateway'
+    Properties:
+      AllocationId: !GetAtt ElasticIP.AllocationId
+      SubnetId: !Ref PublicSubnet
+      Tags:
+        - Key: Name
+          Value: !Sub '${Environment}-Natgateway'
+  
+  # Public Route Table
+  PublicRouteTable:
+    Type: "AWS::EC2::RouteTable"
+    Properties:
+      VpcId: !Ref VPC-ecommerce
+      Tags:
+        - Key: Name
+          Value: !Sub "${Environment}-PublicRouteTable"
+        - Key: Environment
+          Value: !Ref Environment
+
+  # Route to Internet Gateway
+  PublicRoute:
+    Type: "AWS::EC2::Route"
+    DependsOn: InternetGateway
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  # Associate Public Subnet with Public Route Table
+  PublicSubnetRouteTableAssociation:
+    Type: "AWS::EC2::SubnetRouteTableAssociation"
+    Properties:
+      SubnetId: !Ref PublicSubnet
+      RouteTableId: !Ref PublicRouteTable
+
+
+  # Private Route Table
+  PrivateRouteTable:
+    Type: "AWS::EC2::RouteTable"
+    Properties:
+      VpcId: !Ref VPC-ecommerce
+      Tags:
+        - Key: Name
+          Value: !Sub "${Environment}-PrivateRouteTable"
+        - Key: Environment
+          Value: !Ref Environment
+
+  # Route to NAT Gateway
+  PrivateRoute:
+    Type: "AWS::EC2::Route"
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NATGateway
+
+  # Associate Private Subnet with Private Route Table
+  PrivateSubnetRouteTableAssociation:
+    Type: "AWS::EC2::SubnetRouteTableAssociation"
+    Properties:
+      SubnetId: !Ref PrivateSubnet
+      RouteTableId: !Ref PrivateRouteTable
+
+
+
