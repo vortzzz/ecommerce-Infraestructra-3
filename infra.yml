@@ -202,5 +202,213 @@ Resources:
       SubnetId: !Ref PrivateSubnet
       RouteTableId: !Ref PrivateRouteTable
 
+ #Grupo de seguridad ecommerce EC2
+  SecurityGroupEC2:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: "Grupo de seguridad EC2, permite el trafico del Load Balancer y el Bastion"
+      SecurityGroupEgress:
+        - IpProtocol: '-1'  # Todos los protocolos
+          CidrIp: '0.0.0.0/0'
+          Description: 'Permitir todo el trafico de salida'
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          SourceSecurityGroupId: !Ref LoadBalancerSecurityGroup
+          Description: 'Permitir trafico HTTP al Load Balancer'
+        - IpProtocol: tcp
+          FromPort: 8080
+          ToPort: 8080
+          SourceSecurityGroupId: !Ref LoadBalancerSecurityGroup
+          Description: 'Permitir acceso a Spring Boot desde el ALB'
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          SourceSecurityGroupId: !Ref BastionSecurityGroup
+          Description: 'Permitir SSH desde el Bastion'
 
+      Tags:
+        - Key: Name
+          Value: !Sub "${Environment}-SecurityGroupEC2"
+      VpcId: !Ref VPC-ecommerce
 
+ #Grupo de seguridad Bastion
+  BastionSecurityGroup:
+    Type: "AWS::EC2::SecurityGroup"
+    Properties:
+      GroupDescription: "Grupo de seguridad del Bastion"
+      SecurityGroupIngress: 
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: !Ref SSHBastion
+      Tags: 
+        - Key: Name
+          Value: !Sub "${Environment}-BastionSecurityGroup"
+      VpcId: !Ref VPC-ecommerce
+
+ #Grupo de seguridad Base de datos
+  SecurityGroupDB:
+    Type: "AWS::EC2::SecurityGroup"
+    Properties:
+      GroupDescription: "Grupo de seguridad de la base de datos"
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 3306
+          ToPort: 3306
+          CidrIp: !Ref SecurityGroupEC2 
+      Tags:
+        - Key: Name
+          Value: !Sub "${Environment}-SecurityGroupDB"
+      VpcId: !Ref VPC-ecommerce
+
+ #Grupo de seguridad de Load Balancer
+  LoadBalancerSecurityGroup:
+    Type: 'AWS::EC2::SecurityGroup'
+    Properties:
+      GroupDescription: 'Security Group para ALB - Permite HTTP/HTTPS'
+      VpcId: !Ref VPC-ecommerce
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: '0.0.0.0/0'
+          Description: 'Permitir HTTP desde cualquier lugar'
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: '0.0.0.0/0'
+          Description: 'Permitir HTTPS desde cualquier lugar'
+      SecurityGroupEgress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: '0.0.0.0/0'
+          Description: 'Permitir respuestas HTTP a las instancias'
+        - IpProtocol: tcp
+          FromPort: 8080
+          ToPort: 8080
+          CidrIp: '0.0.0.0/0'
+          Description: 'Permitir respuestas al puerto 8080'
+      Tags:
+        - Key: Name
+          Value: !Sub '${EnvironmentName}-LoadBalancerSecurityGroup'
+
+  DBSubnetGroup:
+    Type: 'AWS::RDS::DBSubnetGroup'
+    Properties:
+      DBSubnetGroupDescription: 'Subnet group para RDS'
+      SubnetIds:
+        - !Ref PrivateSubnet
+        - !Ref PrivateSubnet2
+      Tags:
+        - Key: Name
+          Value: !Sub '${Environment}-DBSubnetGroup'
+            
+#Instancia Base de datos
+  DBInstance:    
+    Type: "AWS::RDS::DBInstance"
+    Properties:
+      AllocatedStorage: 20
+      DBInstanceClass: !Ref DBInstanceType
+      DBName: !Ref DbName
+      DBSubnetGroupName: !Ref DBSubnetGroup
+      Engine: "MySQL"
+      MasterUsername: !Ref DbUser
+      MasterUserPassword: !Ref DbPassword
+      MultiAZ: false
+      PubliclyAccessible: false 
+      Tags:
+        - Key: Name
+          Value: !Sub '${Environment}-DBInstance'
+      VPCSecurityGroups:
+        - !GetAtt SecurityGroupDB.GroupId
+
+  EcommerceEC2:
+    Type: 'AWS::EC2::LaunchTemplate'
+    Properties:
+      LaunchTemplateName: !Sub '${Environment}-LaunchTemplate'
+      LaunchTemplateData:
+        ImageId: !FindInMap ['Region', !Ref 'AWS::Region', 'AMI']
+        InstanceType: !Ref InstanceType
+        KeyName: !Ref KeyName
+        SecurityGroupIds:
+          - !Ref SecurityGroupEC2
+        UserData:
+          Fn::Base64:
+           Fn::Sub:
+             - | 
+             - dbusername: !Ref DbUser
+               dbpassword: !Ref DbPassword
+               dbendpoint: !GetAtt DBInstance.Endpoint.Address
+
+  BastionHost:
+    Type: 'AWS::EC2::Instance'
+    Properties:
+      InstanceType: 't2.micro'
+      ImageId: !FindInMap ['Region', !Ref 'AWS::Region', 'AMI']
+      SubnetId: !Ref PublicSubnet
+      SecurityGroupIds:
+        - !Ref BastionSecurityGroup
+      KeyName: !Ref KeyName
+      Tags:
+        - Key: Name
+          Value: !Sub '${Environment}-BastionHost' 
+
+  AutoescalingGroup:
+    Type: 'AWS::AutoScaling::AutoScalingGroup'
+    Properties:
+      MinSize: 1
+      MaxSize: 2
+      DesiredCapacity: 1
+      HealthCheckType: ELB
+      HealthCheckGracePeriod: 300
+      TargetGroupARNs:
+        - !Ref ALBTargetGroup
+      VPCZoneIdentifier:
+        - !Ref PrivateSubnet
+      LaunchTemplate:
+        LaunchTemplateId: !Ref EcommerceEC2
+        Version: !GetAtt EcommerceEC2.LatestVersionNumber
+
+  ApplicationLoadBalancer:
+    Type: 'AWS::ElasticLoadBalancingV2::LoadBalancer'
+    Properties:
+      Name: !Sub '${Environment}-ApplicationLoadBalancer'
+      Scheme: internet-facing
+      Subnets:
+        - !Ref PublicSubnet
+        - !Ref PublicSubnet2
+      SecurityGroups:
+        - !Ref LoadBalancerSecurityGroup
+      Type: application
+      Tags:
+        - Key: Name
+          Value: !Sub '${Environment}-ApplicationLoadBalancer'
+
+    ALBTargetGroup:
+      Type: 'AWS::ElasticLoadBalancingV2::TargetGroup'
+      Properties:
+        Name: !Sub '${Environment}-ALBTargetGroup'
+        Port: 80
+        Protocol: HTTP
+        VpcId: !Ref VPC-ecommerce
+        HealthCheckPath: '/'
+        HealthCheckIntervalSeconds: 30
+        TargetType: instance
+
+    ALBListener:
+      Type: 'AWS::ElasticLoadBalancingV2::Listener'
+      Properties:
+        LoadBalancerArn: !Ref ApplicationLoadBalancer
+        Port: 80
+        Protocol: HTTP
+        DefaultActions:
+          - Type: forward
+            TargetGroupArn: !Ref ALBTargetGroup
+
+Outputs:
+  URL:
+    Description: "Url del ecommerce"
+    Value: !Sub 'http://${ApplicationLoadBalancer.DNSName}'
