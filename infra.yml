@@ -2,7 +2,7 @@ AWSTemplateFormatVersion: '2010-09-09'
 Description: "Arquitectura del ecommerce"
 
 Parameters: 
-  Enviroment: 
+  Environment: 
     Description: "dev"
     Type: String 
     Default: "dev"
@@ -64,7 +64,7 @@ Mappings:
       AMI: 'ami-0f88e80871fd81e91' #Amazon Linux 2
 
 Resources: 
-  VPC-ecommerce:
+  VPCEcommerce:
     Type: "AWS::EC2::VPC"
     Properties:
       CidrBlock: "10.0.0.0/16"
@@ -72,12 +72,12 @@ Resources:
       EnableDnsSupport: true
       Tags:
         - Key: Name
-          Value: !Sub "${Enviroment}-VPC"
+          Value: !Sub '${Environment}-VPC'
 
   PublicSubnet:
     Type: 'AWS::EC2::Subnet'
     Properties:
-      VpcId: !Ref VPC-ecommerce
+      VpcId: !Ref VPCEcommerce
       CidrBlock: '10.0.1.0/24'
       AvailabilityZone: !Select [0, !GetAZs '']
       MapPublicIpOnLaunch: true #Subnet publica 
@@ -88,9 +88,9 @@ Resources:
   PublicSubnet2:
     Type: 'AWS::EC2::Subnet'
     Properties:
-      VpcId: !Ref VPC-ecommerce
+      VpcId: !Ref VPCEcommerce
       CidrBlock: '10.0.3.0/24'
-      AvailabilityZone: !Select [0, !GetAZs '']
+      AvailabilityZone: !Select [1, !GetAZs '']
       MapPublicIpOnLaunch: true #Subnet publica 
       Tags:
         - Key: Name
@@ -99,7 +99,7 @@ Resources:
   PrivateSubnet:
     Type: 'AWS::EC2::Subnet'
     Properties:
-      VpcId: !Ref VPC-ecommerce
+      VpcId: !Ref VPCEcommerce
       CidrBlock: '10.0.2.0/24'
       AvailabilityZone: !Select [0, !GetAZs '']
       MapPublicIpOnLaunch: false #Subnet privada 
@@ -110,9 +110,9 @@ Resources:
   PrivateSubnet2:
     Type: 'AWS::EC2::Subnet'
     Properties:
-      VpcId: !Ref VPC-ecommerce
+      VpcId: !Ref VPCEcommerce
       CidrBlock: '10.0.4.0/24'
-      AvailabilityZone: !Select [0, !GetAZs '']
+      AvailabilityZone: !Select [1, !GetAZs '']
       MapPublicIpOnLaunch: false #Subnet privada 
       Tags:
         - Key: Name
@@ -129,7 +129,7 @@ Resources:
     Type: "AWS::EC2::VPCGatewayAttachment"
     Properties:
       InternetGatewayId: !Ref InternetGateway
-      VpcId: !Ref VPC-ecommerce
+      VpcId: !Ref VPCEcommerce
 
   ElasticIP:
     Type: "AWS::EC2::EIP"
@@ -137,7 +137,7 @@ Resources:
       Domain: vpc
       Tags:
         - Key: Name
-          Values: !Sub '${Environment}-ElasticIP'
+          Value: !Sub '${Environment}-ElasticIP'
 
   NatGateway:
     Type: 'AWS::EC2::NatGateway'
@@ -152,7 +152,7 @@ Resources:
   PublicRouteTable:
     Type: "AWS::EC2::RouteTable"
     Properties:
-      VpcId: !Ref VPC-ecommerce
+      VpcId: !Ref VPCEcommerce
       Tags:
         - Key: Name
           Value: !Sub "${Environment}-PublicRouteTable"
@@ -180,7 +180,7 @@ Resources:
   PrivateRouteTable:
     Type: "AWS::EC2::RouteTable"
     Properties:
-      VpcId: !Ref VPC-ecommerce
+      VpcId: !Ref VPCEcommerce
       Tags:
         - Key: Name
           Value: !Sub "${Environment}-PrivateRouteTable"
@@ -193,7 +193,7 @@ Resources:
     Properties:
       RouteTableId: !Ref PrivateRouteTable
       DestinationCidrBlock: 0.0.0.0/0
-      NatGatewayId: !Ref NATGateway
+      NatGatewayId: !Ref NatGateway
 
   # Associate Private Subnet with Private Route Table
   PrivateSubnetRouteTableAssociation:
@@ -231,7 +231,7 @@ Resources:
       Tags:
         - Key: Name
           Value: !Sub "${Environment}-SecurityGroupEC2"
-      VpcId: !Ref VPC-ecommerce
+      VpcId: !Ref VPCEcommerce
 
  #Grupo de seguridad Bastion
   BastionSecurityGroup:
@@ -246,7 +246,7 @@ Resources:
       Tags: 
         - Key: Name
           Value: !Sub "${Environment}-BastionSecurityGroup"
-      VpcId: !Ref VPC-ecommerce
+      VpcId: !Ref VPCEcommerce
 
  #Grupo de seguridad Base de datos
   SecurityGroupDB:
@@ -257,18 +257,18 @@ Resources:
         - IpProtocol: tcp
           FromPort: 3306
           ToPort: 3306
-          CidrIp: !Ref SecurityGroupEC2 
+          SourceSecurityGroupId: !Ref SecurityGroupEC2 
       Tags:
         - Key: Name
           Value: !Sub "${Environment}-SecurityGroupDB"
-      VpcId: !Ref VPC-ecommerce
+      VpcId: !Ref VPCEcommerce
 
  #Grupo de seguridad de Load Balancer
   LoadBalancerSecurityGroup:
     Type: 'AWS::EC2::SecurityGroup'
     Properties:
       GroupDescription: 'Security Group para ALB - Permite HTTP/HTTPS'
-      VpcId: !Ref VPC-ecommerce
+      VpcId: !Ref VPCEcommerce
       SecurityGroupIngress:
         - IpProtocol: tcp
           FromPort: 80
@@ -293,7 +293,7 @@ Resources:
           Description: 'Permitir respuestas al puerto 8080'
       Tags:
         - Key: Name
-          Value: !Sub '${EnvironmentName}-LoadBalancerSecurityGroup'
+          Value: !Sub '${Environment}-LoadBalancerSecurityGroup'
 
   DBSubnetGroup:
     Type: 'AWS::RDS::DBSubnetGroup'
@@ -314,7 +314,7 @@ Resources:
       DBInstanceClass: !Ref DBInstanceType
       DBName: !Ref DbName
       DBSubnetGroupName: !Ref DBSubnetGroup
-      Engine: "MySQL"
+      Engine: "postgres"
       MasterUsername: !Ref DbUser
       MasterUserPassword: !Ref DbPassword
       MultiAZ: false
@@ -335,13 +335,75 @@ Resources:
         KeyName: !Ref KeyName
         SecurityGroupIds:
           - !Ref SecurityGroupEC2
-        UserData:
-          Fn::Base64:
-           Fn::Sub:
-             - | 
-             - dbusername: !Ref DbUser
-               dbpassword: !Ref DbPassword
-               dbendpoint: !GetAtt DBInstance.Endpoint.Address
+        UserData: 
+          Fn::Base64: 
+           Fn::Sub: 
+            - |
+              #!/bin/bash
+              set -xe
+
+              # --- PASO 1: Actualizar sistema e instalar dependencias ---
+              dnf update -y
+              dnf install -y git nodejs postgresql15
+
+              # --- PASO 2: Clonar y desplegar proyecto ---
+              cd /home/ec2-user
+              git clone https://github.com/vortzzz/e-commerce.git
+
+              # Corregir permisos inmediatamente
+              chown -R ec2-user:ec2-user /home/ec2-user/e-commerce
+
+              cd /home/ec2-user/e-commerce/nova-backend
+
+              # --- PASO 3: Configurar variables de entorno ---
+              cat > .env <<EOF
+              PORT=3000
+              NODE_ENV=production
+
+              JWT_SECRET=ecommerce_jwt_secret_2026_seguro
+              JWT_EXPIRES_IN=7d
+
+              BCRYPT_ROUNDS=10
+
+              DB_HOST=${dbendpoint}
+              DB_PORT=5432
+              DB_NAME=${dbname}
+              DB_USER=${dbusername}
+              DB_PASSWORD=${dbpassword}
+              DB_SSL=false
+
+              DB_POOL_MAX=10
+              DB_IDLE_TIMEOUT_MS=30000
+              DB_CONNECTION_TIMEOUT_MS=5000
+
+              ALLOWED_ORIGINS=*
+              PAYMENT_SERVICE_URL=https://api.fakepay.nova/v1
+              PAYMENT_API_KEY=pk_test_demo
+              EOF
+
+              chown ec2-user:ec2-user .env
+
+              # --- PASO 4: Inicializar PostgreSQL ---
+              export PGPASSWORD=${dbpassword}
+              psql -h ${dbendpoint} -U ${dbusername} -d ${dbname} -f /home/ec2-user/e-commerce/nova-backend/sql/init.sql
+
+              # --- PASO 5: Instalar backend como ec2-user ---
+              su - ec2-user -c "cd /home/ec2-user/e-commerce/nova-backend && npm install"
+
+              # PM2 sí va global, así que sudo/root está bien
+              sudo npm install -g pm2
+
+              # Iniciar app como ec2-user
+              su - ec2-user -c "cd /home/ec2-user/e-commerce/nova-backend && pm2 start npm --name ecommerce-api -- start"
+              su - ec2-user -c "pm2 save"
+
+              # --- PASO 6: Persistir PM2 ---
+              env PATH=$PATH:/usr/bin pm2 startup systemd -u ec2-user --hp /home/ec2-user
+
+            - dbusername: !Ref DbUser
+              dbpassword: !Ref DbPassword
+              dbendpoint: !GetAtt DBInstance.Endpoint.Address
+              dbname: !Ref DbName
 
   BastionHost:
     Type: 'AWS::EC2::Instance'
@@ -387,28 +449,30 @@ Resources:
         - Key: Name
           Value: !Sub '${Environment}-ApplicationLoadBalancer'
 
-    ALBTargetGroup:
-      Type: 'AWS::ElasticLoadBalancingV2::TargetGroup'
-      Properties:
-        Name: !Sub '${Environment}-ALBTargetGroup'
-        Port: 80
-        Protocol: HTTP
-        VpcId: !Ref VPC-ecommerce
-        HealthCheckPath: '/'
-        HealthCheckIntervalSeconds: 30
-        TargetType: instance
+  ALBTargetGroup:
+    Type: 'AWS::ElasticLoadBalancingV2::TargetGroup'
+    Properties:
+      Name: !Sub '${Environment}-ALBTargetGroup'
+      Port: 3000
+      Protocol: HTTP
+      VpcId: !Ref VPCEcommerce
+      HealthCheckPath: /health
+      HealthCheckIntervalSeconds: 30
+      TargetType: instance
 
-    ALBListener:
-      Type: 'AWS::ElasticLoadBalancingV2::Listener'
-      Properties:
-        LoadBalancerArn: !Ref ApplicationLoadBalancer
-        Port: 80
-        Protocol: HTTP
-        DefaultActions:
-          - Type: forward
-            TargetGroupArn: !Ref ALBTargetGroup
+  ALBListener:
+    Type: 'AWS::ElasticLoadBalancingV2::Listener'
+    Properties:
+      LoadBalancerArn: !Ref ApplicationLoadBalancer
+      Port: 80
+      Protocol: HTTP
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref ALBTargetGroup
 
 Outputs:
   URL:
     Description: "Url del ecommerce"
-    Value: !Sub 'http://${ApplicationLoadBalancer.DNSName}'
+    Value: !Sub
+      - http://${DNS}
+      - DNS: !GetAtt ApplicationLoadBalancer.DNSName
