@@ -248,20 +248,20 @@ Resources:
           Value: !Sub "${Environment}-BastionSecurityGroup"
       VpcId: !Ref VPCEcommerce
 
- #Grupo de seguridad Base de datos
+  #Grupo de seguridad Base de datos
   SecurityGroupDB:
-    Type: "AWS::EC2::SecurityGroup"
+    Type: AWS::EC2::SecurityGroup
     Properties:
-      GroupDescription: "Grupo de seguridad de la base de datos"
+      GroupDescription: Grupo de seguridad de la base de datos
+      VpcId: !Ref VPCEcommerce
       SecurityGroupIngress:
         - IpProtocol: tcp
-          FromPort: 3306
-          ToPort: 3306
-          SourceSecurityGroupId: !Ref SecurityGroupEC2 
+          FromPort: 5432
+          ToPort: 5432
+          SourceSecurityGroupId: !Ref SecurityGroupEC2
       Tags:
         - Key: Name
-          Value: !Sub "${Environment}-SecurityGroupDB"
-      VpcId: !Ref VPCEcommerce
+          Value: !Sub '${Environment}-SecurityGroupDB'
 
  #Grupo de seguridad de Load Balancer
   LoadBalancerSecurityGroup:
@@ -339,71 +339,113 @@ Resources:
           Fn::Base64: 
            Fn::Sub: 
             - |
-              #!/bin/bash
-              set -xe
+                #!/bin/bash
+                set -xe
 
-              # --- PASO 1: Actualizar sistema e instalar dependencias ---
-              dnf update -y
-              dnf install -y git nodejs postgresql15
+                LOGFILE=/var/log/userdata-debug.log
+                exec > >(tee -a $LOGFILE) 2>&1
 
-              # --- PASO 2: Clonar y desplegar proyecto ---
-              cd /home/ec2-user
-              git clone https://github.com/vortzzz/e-commerce.git
+                echo "=== Inicio UserData $(date) ==="
 
-              # Corregir permisos inmediatamente
-              chown -R ec2-user:ec2-user /home/ec2-user/e-commerce
+                # --- PASO 1 ---
+                echo "[INICIO] Paso 1: instalar dependencias"
+                dnf update -y
+                dnf install -y git nodejs postgresql15 nginx
+                echo "[OK] Paso 1 completado"
 
-              cd /home/ec2-user/e-commerce/nova-backend
+                # --- PASO 2 ---
+                echo "[INICIO] Paso 2: clonar repo"
+                cd /home/ec2-user
+                git clone https://github.com/vortzzz/e-commerce.git
+                chown -R ec2-user:ec2-user /home/ec2-user/e-commerce
+                echo "[OK] Paso 2 completado"
 
-              # --- PASO 3: Configurar variables de entorno ---
-              cat > .env <<EOF
-              PORT=3000
-              NODE_ENV=production
+                # --- PASO 3 ---
+                echo "[INICIO] Paso 3: crear .env"
+                cd /home/ec2-user/e-commerce/nova-backend
 
-              JWT_SECRET=ecommerce_jwt_secret_2026_seguro
-              JWT_EXPIRES_IN=7d
+                cat > .env <<EOF
+                PORT=3000
+                NODE_ENV=production
+                JWT_SECRET=ecommerce_jwt_secret_2026_seguro
+                JWT_EXPIRES_IN=7d
+                BCRYPT_ROUNDS=10
+                DB_HOST=${dbendpoint}
+                DB_PORT=5432
+                DB_NAME=${dbname}
+                DB_USER=${dbusername}
+                DB_PASSWORD=${dbpassword}
+                DB_SSL=true
+                DB_POOL_MAX=10
+                DB_IDLE_TIMEOUT_MS=30000
+                DB_CONNECTION_TIMEOUT_MS=5000
+                ALLOWED_ORIGINS= http://${albdns}
+                PAYMENT_SERVICE_URL=https://api.fakepay.nova/v1
+                PAYMENT_API_KEY=pk_test_demo
+                EOF
 
-              BCRYPT_ROUNDS=10
+                chown ec2-user:ec2-user .env
+                echo "[OK] Paso 3 completado"
 
-              DB_HOST=${dbendpoint}
-              DB_PORT=5432
-              DB_NAME=${dbname}
-              DB_USER=${dbusername}
-              DB_PASSWORD=${dbpassword}
-              DB_SSL=false
+                # --- PASO 4 ---
+                echo "[INICIO] Paso 4: inicializar postgres"
+                export PGPASSWORD=${dbpassword}
+                psql -h ${dbendpoint} -U ${dbusername} -d ${dbname} -f /home/ec2-user/e-commerce/nova-backend/sql/init.sql
+                echo "[OK] Paso 4 completado"
 
-              DB_POOL_MAX=10
-              DB_IDLE_TIMEOUT_MS=30000
-              DB_CONNECTION_TIMEOUT_MS=5000
+                # --- PASO 5 ---
+                echo "[INICIO] Paso 5: npm install"
+                su - ec2-user -c "cd /home/ec2-user/e-commerce/nova-backend && npm install"
+                echo "[OK] Paso 5 completado"
 
-              ALLOWED_ORIGINS=*
-              PAYMENT_SERVICE_URL=https://api.fakepay.nova/v1
-              PAYMENT_API_KEY=pk_test_demo
-              EOF
+                # --- PASO 6 ---
+                echo "[INICIO] Paso 6: pm2"
+                npm install -g pm2
+                su - ec2-user -c "cd /home/ec2-user/e-commerce/nova-backend && pm2 start npm --name ecommerce-api -- start"
+                su - ec2-user -c "pm2 save"
+                echo "[OK] Paso 6 completado"
 
-              chown ec2-user:ec2-user .env
+                # --- PASO 7 ---
+                echo "[INICIO] Paso 7: configurar nginx"
+                cp /home/ec2-user/e-commerce/ecommerce.html /usr/share/nginx/html/index.html
 
-              # --- PASO 4: Inicializar PostgreSQL ---
-              export PGPASSWORD=${dbpassword}
-              psql -h ${dbendpoint} -U ${dbusername} -d ${dbname} -f /home/ec2-user/e-commerce/nova-backend/sql/init.sql
+                cat > /etc/nginx/conf.d/ecommerce.conf <<EOF
+                server {
+                    listen 80;
+                    server_name _;
 
-              # --- PASO 5: Instalar backend como ec2-user ---
-              su - ec2-user -c "cd /home/ec2-user/e-commerce/nova-backend && npm install"
+                    root /usr/share/nginx/html;
+                    index index.html;
 
-              # PM2 sí va global, así que sudo/root está bien
-              sudo npm install -g pm2
+                    location / {
+                        try_files \$uri \$uri/ /index.html;
+                    }
 
-              # Iniciar app como ec2-user
-              su - ec2-user -c "cd /home/ec2-user/e-commerce/nova-backend && pm2 start npm --name ecommerce-api -- start"
-              su - ec2-user -c "pm2 save"
+                    location /api/ {
+                        proxy_pass http://localhost:3000/;
+                        proxy_http_version 1.1;
+                        proxy_set_header Host \$host;
+                        proxy_set_header X-Real-IP \$remote_addr;
+                    }
+                }
+                EOF
 
-              # --- PASO 6: Persistir PM2 ---
-              env PATH=$PATH:/usr/bin pm2 startup systemd -u ec2-user --hp /home/ec2-user
+                systemctl enable nginx
+                systemctl restart nginx
+                echo "[OK] Paso 7 completado"
+
+                # --- PASO 8 ---
+                echo "[INICIO] Paso 8: startup pm2"
+                env PATH=$PATH:/usr/bin pm2 startup systemd -u ec2-user --hp /home/ec2-user
+                echo "[OK] Paso 8 completado"
+
+                echo "=== UserData finalizado $(date) ==="
 
             - dbusername: !Ref DbUser
               dbpassword: !Ref DbPassword
               dbendpoint: !GetAtt DBInstance.Endpoint.Address
               dbname: !Ref DbName
+              albdns: !GetAtt ApplicationLoadBalancer.DNSName
 
   BastionHost:
     Type: 'AWS::EC2::Instance'
@@ -453,11 +495,13 @@ Resources:
     Type: 'AWS::ElasticLoadBalancingV2::TargetGroup'
     Properties:
       Name: !Sub '${Environment}-ALBTargetGroup'
-      Port: 3000
+      Port: 80
       Protocol: HTTP
       VpcId: !Ref VPCEcommerce
-      HealthCheckPath: /health
+      HealthCheckPath: /
       HealthCheckIntervalSeconds: 30
+      Matcher:
+        HttpCode: 200
       TargetType: instance
 
   ALBListener:
